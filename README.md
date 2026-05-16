@@ -3,11 +3,13 @@
 > Reference Hub implementation of the **Joint Execution & Commerce Protocol** (JECP).
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-production-green.svg)](https://jecp.dev)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://jecp.dev)
 [![Built with](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
-[![Spec](https://img.shields.io/badge/spec-v1.0--draft-blue.svg)](https://github.com/jecpdev/jecp-spec)
+[![Spec](https://img.shields.io/badge/spec-v1.1.1-blue.svg)](https://github.com/jecpdev/jecp-spec)
 
-A Rust + Axum Hub implementation. Powers https://jecp.dev in production.
+A Rust + Axum Hub. Reference implementation of the JECP spec; the production Hub at https://jecp.dev runs on this exact source.
+
+**Indie operators**: see the **alpha readiness notice** below before attempting `cargo run`.
 
 ---
 
@@ -20,42 +22,26 @@ A Rust + Axum Hub implementation. Powers https://jecp.dev in production.
 - **Discovery** — `/v1/capabilities` (live catalog, includes both built-in and third-party)
 - **Forwarding** — HMAC-SHA256 signed requests to Provider endpoints with replay window
 
-## Quick start (developers)
+## ⚠️ Alpha readiness notice (2026-05-16)
 
-### Prerequisites
+The production Hub at jecp.dev runs on this exact source, but `cargo run` from a fresh clone is **not yet supported**. The binary boots only with all of:
 
-- Rust 1.75+
-- PostgreSQL 15+ (Supabase or self-hosted)
-- Stripe account (test mode is fine for dev)
+- a Supabase-schema Postgres (51 migrations applied)
+- Stripe Connect platform account + test mode
+- Anthropic API key
+- AWS KMS asymmetric key (ECDSA secp256k1) for the keeper
+- Sentry + Better Stack credentials
+- Cloudflare DNS zone for Provider DNS verification
 
-### Local development
+We have **not yet** packaged this into a one-shot `docker-compose`; that's the v0.2 priority. See [ROADMAP.md](./ROADMAP.md).
 
-```bash
-git clone https://github.com/jecpdev/jecp-server.git
-cd jecp-server
-cp .env.example .env
-# Edit .env with your DB URL and Stripe test keys
-cargo run
-```
+**Until then, this repo is best used as a specification-conforming reference**:
 
-Server starts on `localhost:8080`.
+- Read the Rust to see how the spec is implemented (`src/routes/`, `src/auth/`, `src/protocol/`).
+- Point a JECP SDK / CLI at the live Hub at `https://jecp.dev` instead of running your own.
+- Use [@jecpdev/sdk](https://www.npmjs.com/package/@jecpdev/sdk) or [@jecpdev/cli](https://www.npmjs.com/package/@jecpdev/cli) for the agent / Provider integration path.
 
-### Health check
-
-```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/v1/capabilities | jq
-```
-
-### Production deployment
-
-```bash
-flyctl deploy
-```
-
-The production Hub at jecp.dev runs on Fly.io (Tokyo region, NRT).
-
-## Architecture
+## Architecture (for readers, not runners)
 
 ```
 src/
@@ -71,23 +57,19 @@ src/
 ├── billing/              # invoke_charge() (atomic deduct + 85/10/5 split)
 ├── middleware/           # CORS, rate limit (60 RPM/agent), tracing
 ├── protocol/             # Wire format, error catalog with next_action
-└── services/             # Postgres pool, Stripe API, signing
+└── services/             # Postgres pool, Stripe API, signing, KMS-backed keeper
 ```
 
 ## Specification
 
-This server implements [JECP Spec v1.0-draft](https://github.com/jecpdev/jecp-spec).
+This server implements [JECP Spec v1.1.1](https://github.com/jecpdev/jecp-spec).
 RFC 2119 compliant, JSON Schema 2020-12.
 
-## Performance (production, May 2026)
+## Performance
 
-| Metric | Target | Current |
-|--------|-------:|--------:|
-| `/v1/invoke` p50 | < 200ms | ~127ms |
-| `/v1/invoke` p95 | < 500ms | ~340ms |
-| Wallet debit consistency | 100% | 100% (atomic SQL function) |
-| Idempotency window | 24h | 24h on `(agent_id, request_id)` |
-| Concurrent RPS | 100+ | tested 200 |
+Production numbers (p50 ~127ms on `/v1/invoke` cached path) hold on the Tufe-operated Hub at jecp.dev under live load.
+
+**These are not reproducible from a fresh clone** — they depend on the Postgres schema, Stripe Connect accounts, and KMS keeper key that the Hub is provisioned against. A reproducible benchmark methodology + a self-hosted-friendly profile ship in v0.2 — see [ROADMAP.md](./ROADMAP.md).
 
 ## Client SDKs
 
@@ -95,18 +77,19 @@ RFC 2119 compliant, JSON Schema 2020-12.
 - **Python:** planned (v0.2)
 - **Go:** planned (v0.3)
 
-The protocol is plain HTTP+JSON, so any language can implement directly. See [spec §3](https://github.com/jecpdev/jecp-spec/blob/main/spec/03-api.md).
+The protocol is plain HTTP+JSON, so any language can implement directly. See [the JECP spec](https://github.com/jecpdev/jecp-spec).
 
-## Running your own Hub
+## Running your own Hub (today's reality)
 
-You don't need to use jecp.dev. Run your own Hub:
+For now, the realistic path is to **use the hosted Hub at jecp.dev** (it's the only fully-provisioned deployment of this reference).
 
-1. Fork this repo
-2. Configure your DB + Stripe accounts
-3. Deploy (Fly.io / Railway / your-cloud-of-choice)
-4. Optionally federate with jecp.dev (federation registry is on Q4 roadmap)
+If you already have all 6 dependencies in the Alpha readiness notice above and want to self-host today, your starting points are:
 
-The protocol is multi-vendor and federation-ready.
+1. `fly.toml` — current production Fly.io config (retarget the app name + secrets)
+2. `Dockerfile` — current production container build
+3. `spec/openapi.yaml` — OpenAPI 3.1 schema if you want to start fresh in another language
+
+The protocol is multi-vendor and federation-ready by design; the federation registry itself ships in Q4 ([ROADMAP.md](./ROADMAP.md)).
 
 ## License
 
