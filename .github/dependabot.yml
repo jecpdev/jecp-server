@@ -1,0 +1,42 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    groups:
+      tokio-stack:
+        patterns:
+          - tokio*
+          - hyper*
+          - tower*
+          - axum*
+      tls-stack:
+        patterns:
+          - rustls*
+          - webpki-roots
+          - ring
+      aws-stack:
+        patterns:
+          - aws-*
+          - aws-sdk-*
+    commit-message:
+      prefix: 'deps'
+      include: 'scope'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: 'ci(deps)'

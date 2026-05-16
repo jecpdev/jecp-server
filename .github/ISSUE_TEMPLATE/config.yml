@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security disclosure (do NOT open a public issue)
+    url: https://jecp.dev/.well-known/security.txt
+    about: Email security@jecp.dev — RFC 9116 coordinated disclosure.
+  - name: Question about the JECP protocol spec
+    url: https://github.com/jecpdev/jecp-spec/issues
+    about: Spec questions belong in the spec repo, not the Hub reference implementation.
+  - name: TypeScript SDK / CLI questions
+    url: https://github.com/jecpdev/jecp-sdk-typescript/issues
+    about: Issues about @jecpdev/sdk or @jecpdev/cli belong in the SDK repo.
+  - name: General discussion
+    url: https://jecp.dev
+    about: Visit jecp.dev for the protocol overview.
