@@ -1,0 +1,832 @@
+openapi: 3.1.0
+info:
+  title: JECP — Joint Execution & Commerce Protocol
+  description: |
+    Open protocol for AI agents to discover, execute, and pay for external services.
+
+    Two intents through one protocol:
+    - **Sell to agents**: turn AI agent traffic into per-call revenue
+    - **Build with agents**: give your agent its own wallet and budget cap
+
+    All endpoints serve `application/json` unless noted otherwise.
+  version: 1.0.0-draft
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+  contact:
+    email: hello@jecp.dev
+    url: https://jecp.dev
+servers:
+  - url: https://jecp.dev
+    description: Production Hub (operated by Tufe Company Inc.)
+tags:
+  - name: Agent
+    description: Agent registration and capability invocation
+  - name: Provider
+    description: Provider onboarding, manifest publishing
+  - name: Catalog
+    description: Capability discovery
+  - name: Refund
+    description: Programmatic refund flow (W2)
+  - name: Webhook
+    description: Async event subscription (W4)
+  - name: Health
+    description: Health and metadata endpoints
+
+paths:
+  /v1/invoke:
+    post:
+      tags: [Agent]
+      summary: Invoke a capability
+      description: |
+        Invoke a capability action. Atomic billing per successful call.
+        Wallet debited; revenue split 85/10/5 (Provider/Hub/Payment).
+        Idempotent on `id` for 24h. Failures return `next_action` for recovery.
+
+        **Streaming (W5).** Send `Accept: text/event-stream` to receive a
+        Server-Sent Events stream when the capability action declares
+        `streaming: true` in its manifest. Events: `open`, `chunk`, `meter`,
+        `completed`, `error`, `cancelled`. Billing settles on `completed`
+        (Phase A: flat `pricing.base`; Phase B: variable per-token / per-second
+        / per-chunk via accumulated `meter` totals). 30 s no-progress timeout
+        and 5 min total stream cap. Returns 406 `NOT_STREAMABLE` for streaming
+        Accept against a non-streaming action.
+      security:
+        - AgentAuth: []
+      parameters:
+        - name: Accept
+          in: header
+          description: |
+            Set to `text/event-stream` to opt into SSE streaming. Default is
+            `application/json`.
+          required: false
+          schema:
+            type: string
+            enum: ["application/json", "text/event-stream"]
+            default: "application/json"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvokeRequest" }
+            examples:
+              translate:
+                value:
+                  jecp: "1.0"
+                  id: "req-001"
+                  capability: "jobdonebot/content-factory"
+                  action: "translate"
+                  input: { text: "Hello", target_lang: "JA" }
+                  mandate:
+                    agent_id: "jdb_ag_..."
+                    api_key: "jdb_ak_..."
+                    budget_usdc: 1.00
+              stream:
+                value:
+                  jecp: "1.0"
+                  id: "req-002"
+                  capability: "llm/chat"
+                  action: "complete"
+                  input: { prompt: "Write a haiku about TCP backpressure." }
+                  streaming: true
+      responses:
+        "200":
+          description: |
+            Successful invocation. The response media type depends on the
+            client's `Accept` header — `application/json` for the regular
+            single-response path, `text/event-stream` for the streaming path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvokeSuccess" }
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE stream framed as `event: <name>\ndata: <json>\n\n`.
+                  Event names: `open`, `chunk`, `meter`, `completed`,
+                  `error`, `cancelled`. Exactly one of
+                  `completed`/`error`/`cancelled` is the last event.
+                example: |
+                  event: open
+                  data: {"request_id":"req-002","capability":"llm/chat","action":"complete"}
+
+                  event: chunk
+                  data: {"delta":"Hello","index":0}
+
+                  event: meter
+                  data: {"tokens":12,"elapsed_ms":340}
+
+                  event: completed
+                  data: {"result":{"full_text":"Hello world"},"billing":{"charged":true,"amount_usdc":0.000045,"transaction_id":"tx-..."}}
+        "402":
+          description: Insufficient balance / budget
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JecpError" }
+        "404":
+          description: Capability or action not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JecpError" }
+        "406":
+          description: |
+            Streaming requested for a non-streaming action.
+            Code: `NOT_STREAMABLE`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JecpError" }
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JecpError" }
+
+  /v1/capabilities:
+    get:
+      tags: [Catalog]
+      summary: List live capabilities (W3 — paginated)
+      description: |
+        Cursor-paginated catalog of all active capabilities.
+        Returns built-in core capabilities + third-party Provider-published ones.
+        Default `page_size` is 50, max 200. Pass `cursor` for subsequent pages.
+        Supports `?paginated=false` for legacy mode (returns up to 200 inline).
+      parameters:
+        - name: cursor
+          in: query
+          description: Opaque cursor from a prior response's `next_cursor`
+          schema: { type: string }
+        - name: page_size
+          in: query
+          description: Items per page, server clamps to [1, 200]
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: namespace
+          in: query
+          description: Filter by Provider namespace
+          schema: { type: string }
+        - name: tags
+          in: query
+          description: Comma-separated tag filter (matches at least one)
+          schema: { type: string }
+        - name: paginated
+          in: query
+          description: Set to `false` for legacy unpaginated response
+          schema: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Catalog page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogResponse" }
+          headers:
+            ETag:
+              description: SHA256-based ETag for caching
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+        "304":
+          description: Not modified (matches If-None-Match)
+        "400":
+          description: Invalid cursor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JecpError" }
+
+  /api/agents/register:
+    post:
+      tags: [Agent]
+      summary: Register a new agent
+      description: |
+        Returns `agent_id`, `api_key`, and 100 free calls.
+        `api_key` is shown only once — save it immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentRegisterRequest" }
+      responses:
+        "200":
+          description: Agent created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRegisterResponse" }
+
+  /api/agents/topup:
+    post:
+      tags: [Agent]
+      summary: Top up the agent's wallet via Stripe Checkout
+      security:
+        - AgentAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TopupRequest" }
+      responses:
+        "200":
+          description: Stripe Checkout URL ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TopupResponse" }
+
+  /v1/providers/register:
+    post:
+      tags: [Provider]
+      summary: Register a new Provider
+      description: |
+        Step 1 of Provider onboarding. Returns `provider_api_key` (one-time)
+        and a DNS verification token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProviderRegisterRequest" }
+      responses:
+        "200":
+          description: Provider record created (status='dns_pending')
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderRegisterResponse" }
+
+  /v1/providers/verify-dns:
+    post:
+      tags: [Provider]
+      summary: Verify DNS TXT record
+      security:
+        - ProviderAuth: []
+      responses:
+        "200":
+          description: DNS verified — Provider can proceed to Stripe
+        "404":
+          description: TXT record not found
+
+  /v1/providers/connect-stripe:
+    post:
+      tags: [Provider]
+      summary: Begin Stripe Connect Express onboarding
+      security:
+        - ProviderAuth: []
+      responses:
+        "200":
+          description: Stripe onboarding URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  onboarding_url: { type: string, format: uri }
+                  account_id: { type: string }
+
+  /v1/manifests:
+    post:
+      tags: [Provider]
+      summary: Publish a capability manifest
+      description: |
+        Provider must be DNS-verified and Stripe-connected.
+        Manifest body is YAML conforming to spec §5.
+      security:
+        - ProviderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-yaml:
+            schema:
+              type: string
+              description: YAML manifest content
+      responses:
+        "200":
+          description: Manifest published, capability is active
+        "400":
+          description: Manifest validation failed
+        "409":
+          description: Namespace conflict
+
+  /v1/refunds:
+    post:
+      tags: [Refund]
+      summary: Request a refund (W2)
+      description: |
+        Request a refund for a successful charge transaction within 30 days.
+        Auto-approves after 24h with no Provider response. Hub keeps 10% fee
+        (processing cost); 90% returns to agent wallet.
+      security:
+        - AgentAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transaction_id, reason]
+              properties:
+                transaction_id: { type: string, format: uuid }
+                reason: { type: string, maxLength: 500 }
+                evidence_url: { type: string, format: uri }
+      responses:
+        "201":
+          description: Refund requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  refund_id: { type: string, example: "rf-abc123..." }
+                  status: { type: string, enum: [requested, auto_approved] }
+                  estimated_resolution: { type: string, format: date-time }
+        "400":
+          description: Invalid body or transaction not refundable
+        "401":
+          description: Auth required
+        "403":
+          description: Transaction does not belong to this agent
+        "404":
+          description: Transaction not found
+        "409":
+          description: Already refunded or duplicate request
+        "429":
+          description: Rate limit (max 5/day)
+    get:
+      tags: [Refund]
+      summary: List my refunds (agent or provider)
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Refund list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  refunds: { type: array, items: { type: object } }
+                  count: { type: integer }
+
+  /v1/refunds/{refund_id}:
+    get:
+      tags: [Refund]
+      summary: Get a single refund
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      parameters:
+        - name: refund_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Refund details
+        "404":
+          description: Refund not found
+
+  /v1/refunds/{refund_id}/approve:
+    post:
+      tags: [Refund]
+      summary: Provider approves a refund
+      security:
+        - ProviderAuth: []
+      parameters:
+        - name: refund_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Approved and processed (90% returned to agent wallet)
+
+  /v1/refunds/{refund_id}/deny:
+    post:
+      tags: [Refund]
+      summary: Provider denies a refund
+      security:
+        - ProviderAuth: []
+      parameters:
+        - name: refund_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Denied
+
+  /v1/subscriptions:
+    post:
+      tags: [Webhook]
+      summary: Subscribe to async events (W4)
+      description: |
+        Subscribe to webhook events. Returns the subscription with `hmac_secret` (shown once).
+        Save it to verify inbound webhook signatures via `verifyWebhook()` SDK helper.
+
+        Event types: `invocation.completed`, `invocation.refunded`, `refund.requested`,
+        `refund.denied`, `wallet.low_balance`, `provider.kyc_status_changed`, `test.synthetic`.
+
+        Empty `events` array means subscribe to ALL.
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint_url]
+              properties:
+                endpoint_url:
+                  type: string
+                  format: uri
+                  description: Must be https://
+                events:
+                  type: array
+                  items: { type: string }
+                  description: Empty = subscribe to all event types
+      responses:
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscription_id: { type: string, format: uuid }
+                  endpoint_url: { type: string, format: uri }
+                  events: { type: array, items: { type: string } }
+                  status: { type: string, enum: [active, paused] }
+                  hmac_secret:
+                    type: string
+                    description: SHOWN ONLY ONCE — base64-encoded. Use to verify webhook signatures.
+    get:
+      tags: [Webhook]
+      summary: List my subscriptions
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      responses:
+        "200":
+          description: Subscription list
+
+  /v1/subscriptions/{sub_id}:
+    patch:
+      tags: [Webhook]
+      summary: Update subscription (events, endpoint, pause/resume)
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      parameters:
+        - name: sub_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endpoint_url: { type: string, format: uri }
+                events: { type: array, items: { type: string } }
+                status: { type: string, enum: [active, paused] }
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Webhook]
+      summary: Delete subscription
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      parameters:
+        - name: sub_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Deleted
+
+  /v1/subscriptions/{sub_id}/test:
+    post:
+      tags: [Webhook]
+      summary: Send a synthetic test event
+      description: |
+        Enqueues a `test.synthetic` event to your webhook endpoint.
+        Useful to verify HMAC signature verification works.
+      security:
+        - AgentAuth: []
+        - ProviderAuth: []
+      parameters:
+        - name: sub_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Test event enqueued
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  version: { type: string }
+
+components:
+  securitySchemes:
+    AgentAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Provide both `X-Agent-ID` and `X-API-Key` headers.
+        Get them from POST /api/agents/register.
+    ProviderAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <provider_api_key>`.
+        Get the key from POST /v1/providers/register.
+
+  schemas:
+    JecpError:
+      type: object
+      required: [jecp, status, error]
+      properties:
+        jecp: { type: string, const: "1.0" }
+        status: { type: string, const: "failed" }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - INSUFFICIENT_BALANCE
+                - INSUFFICIENT_BUDGET
+                - MANDATE_EXPIRED
+                - AUTH_REQUIRED
+                - INVALID_AGENT
+                - RATE_LIMITED
+                - CAPABILITY_NOT_FOUND
+                - ACTION_NOT_FOUND
+                - INSUFFICIENT_TRUST
+                - PROVIDER_UNREACHABLE
+                - PROVIDER_ERROR
+                - INVALID_CURSOR
+            message: { type: string }
+        next_action:
+          oneOf:
+            - $ref: "#/components/schemas/NextActionTopup"
+            - $ref: "#/components/schemas/NextActionRegister"
+            - $ref: "#/components/schemas/NextActionRetryAfter"
+            - $ref: "#/components/schemas/NextActionDiscover"
+            - $ref: "#/components/schemas/NextActionEarnTrust"
+            - $ref: "#/components/schemas/NextActionIncreaseMandate"
+
+    NextActionTopup:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: topup }
+        ui: { type: string, format: uri }
+        api: { type: string, format: uri }
+        hint: { type: string }
+
+    NextActionRegister:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: register }
+        ui: { type: string, format: uri }
+        api: { type: string, format: uri }
+        hint: { type: string }
+
+    NextActionRetryAfter:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: retry_after }
+        hint: { type: string }
+
+    NextActionDiscover:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: discover }
+        api: { type: string, format: uri }
+        hint: { type: string }
+
+    NextActionEarnTrust:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: earn_trust }
+        hint: { type: string }
+
+    NextActionIncreaseMandate:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: increase_mandate }
+        hint: { type: string }
+
+    Mandate:
+      type: object
+      required: [agent_id, api_key]
+      properties:
+        agent_id: { type: string }
+        api_key: { type: string }
+        budget_usdc:
+          type: number
+          format: double
+          minimum: 0
+          description: Budget cap in USDC. Calls exceeding this fail with INSUFFICIENT_BUDGET.
+        expires_at:
+          type: string
+          format: date-time
+          description: ISO 8601 expiry. Mandate ignored after this time.
+        provenance_hash:
+          type: string
+          description: |
+            Optional identity proof hash (HTTP 403 PROVENANCE_MISMATCH on failure).
+
+            **Wire formats**:
+            - **v2 (recommended)**: `"v2:<unix_seconds>:<nonce_hex>:<hmac_hex>"`
+              where `hmac_hex = HMAC-SHA256(api_key, "agent_id:timestamp:nonce")`.
+              `timestamp` MUST be within ±300s of server clock; `nonce` MUST be
+              ≥ 16 hex chars and unique per agent within 600s.
+            - **v1 (legacy, sunset 2026-11-01)**: `"<sha256_hex>"` —
+              `SHA256("agent_id:total_calls:api_key[..8]")`. Cannot be computed
+              after key rotation (plaintext is NULLed). Migrate to v2.
+          example: "v2:1762689600:deadbeef0123456789abcdef01234567:8f3a..."
+
+    InvokeRequest:
+      type: object
+      required: [jecp, id, capability, action, input]
+      properties:
+        jecp: { type: string, const: "1.0" }
+        id:
+          type: string
+          description: Idempotency key. Same id within 24h is treated as the same call.
+        capability:
+          type: string
+          description: Format `namespace/capability`
+          example: jobdonebot/content-factory
+        action: { type: string, example: translate }
+        input: { type: object, description: Action-specific input. }
+        mandate: { $ref: "#/components/schemas/Mandate" }
+
+    InvokeSuccess:
+      type: object
+      required: [jecp, id, status, result, provider, billing]
+      properties:
+        jecp: { type: string, const: "1.0" }
+        id: { type: string }
+        status: { type: string, const: "success" }
+        result: { type: object }
+        provider: { $ref: "#/components/schemas/ProviderRef" }
+        billing: { $ref: "#/components/schemas/BillingSummary" }
+        wallet_balance_after: { type: number, format: double }
+
+    ProviderRef:
+      type: object
+      required: [namespace, capability, version]
+      properties:
+        namespace: { type: string }
+        capability: { type: string }
+        version: { type: string }
+
+    BillingSummary:
+      type: object
+      required: [charged, amount_usdc]
+      properties:
+        charged: { type: boolean }
+        amount_usdc: { type: number, format: double }
+        transaction_id: { type: string }
+        balance_after: { type: number, format: double }
+        provider_share_usdc: { type: number, format: double }
+        hub_fee_usdc: { type: number, format: double }
+        payment_fee_usdc: { type: number, format: double }
+
+    CatalogResponse:
+      type: object
+      required: [jecp, engine, capabilities]
+      properties:
+        jecp: { type: string }
+        engine: { type: string }
+        capabilities:
+          type: array
+          items: { type: object }
+          description: Built-in core capabilities (always full set)
+        third_party_capabilities:
+          type: array
+          items: { $ref: "#/components/schemas/CapabilityCatalogItem" }
+        third_party_count: { type: integer }
+        next_cursor:
+          oneOf: [{ type: string }, { type: 'null' }]
+          description: Cursor for next page (null on last page)
+        has_more: { type: boolean }
+        page_size: { type: integer }
+        paginated: { type: boolean }
+
+    CapabilityCatalogItem:
+      type: object
+      required: [id, namespace, version]
+      properties:
+        id:
+          type: string
+          example: deepl/translate
+        namespace: { type: string }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        total_calls: { type: integer }
+        source: { type: string, enum: [core, third_party] }
+        manifest: { type: object }
+
+    AgentRegisterRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        agent_type: { type: string }
+        description: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+        homepage: { type: string, format: uri }
+        referred_by: { type: string }
+
+    AgentRegisterResponse:
+      type: object
+      required: [agent_id, api_key, name, free_calls_remaining]
+      properties:
+        agent_id: { type: string, example: "jdb_ag_..." }
+        api_key:
+          type: string
+          example: "jdb_ak_..."
+          description: SHOWN ONLY ONCE — save immediately.
+        name: { type: string }
+        free_calls_remaining: { type: integer, default: 100 }
+
+    TopupRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: integer
+          enum: [5, 20, 100]
+        returnTo: { type: string, format: uri }
+
+    TopupResponse:
+      type: object
+      required: [url, sessionId]
+      properties:
+        url: { type: string, format: uri, description: Stripe Checkout URL }
+        sessionId: { type: string }
+
+    ProviderRegisterRequest:
+      type: object
+      required: [namespace, display_name, country, owner_email, endpoint_url]
+      properties:
+        namespace: { type: string, pattern: '^[a-z][a-z0-9-]{1,32}$' }
+        display_name: { type: string }
+        country: { type: string, description: ISO 3166-1 alpha-2, e.g. "JP" }
+        owner_email: { type: string, format: email }
+        endpoint_url: { type: string, format: uri }
+
+    ProviderRegisterResponse:
+      type: object
+      required: [provider_id, provider_api_key, dns_token]
+      properties:
+        provider_id: { type: string, format: uuid }
+        provider_api_key:
+          type: string
+          description: SHOWN ONLY ONCE — save immediately.
+        hmac_secret: { type: string }
+        dns_token:
+          type: string
+          description: Add as TXT _jecp.<your-domain> = "jecp-verify=<token>"

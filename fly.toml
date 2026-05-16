@@ -1,0 +1,30 @@
+# JECP Server — Fly.io configuration
+app = "setsuna-jobdonebot"
+primary_region = "nrt"  # Tokyo
+
+[build]
+
+[env]
+  JECP_HOST = "0.0.0.0"
+  JECP_PORT = "8080"
+  ENVIRONMENT = "production"
+  # jecp.dev を最優先。jobdonebot.com は Phase 5 で削除予定の互換性維持枠。
+  CORS_ORIGINS = "https://jecp.dev,https://api.jecp.dev,https://jobdonebot.com,https://jecp.jobdonebot.com"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

@@ -1,0 +1,15 @@
+# Spectral ruleset for the JECP OpenAPI spec.
+# Uses Stoplight's built-in OAS ruleset as a base.
+# Severity tuning: warn-level rules don't block CI by default but show up
+# in PR review.
+
+extends:
+  - "spectral:oas"
+
+# Selectively downgrade rules that are noisy in our spec without adding
+# real safety. Keep all info, validation, and ref-integrity rules.
+rules:
+  oas3-api-servers: warn          # we use a single canonical server
+  operation-tag-defined: warn     # tags are aspirational, not enforced
+  operation-operationId: warn     # we don't yet hand-author operationId
+  oas3-unused-component: hint     # unused schemas tolerated during build-out

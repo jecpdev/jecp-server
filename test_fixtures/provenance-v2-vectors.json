@@ -1,0 +1,125 @@
+{
+  "spec_version": "1.0.1",
+  "description": "Provenance v2 cross-stack conformance test vectors. Both Rust (jecp Hub) and TypeScript (@jecpdev/sdk) test suites consume this fixture to ensure byte-identical wire format and reject-reasons across implementations. New SDKs MUST pass these vectors before publishing.",
+  "valid": [
+    {
+      "name": "minimum_nonce_16hex",
+      "input": {
+        "api_key": "jdb_ak_test_minimum_001234",
+        "agent_id": "jdb_ag_test_001",
+        "timestamp": 1762689600,
+        "nonce": "0123456789abcdef"
+      },
+      "expected_wire": "v2:1762689600:0123456789abcdef:05642b070b20b1a70008b7a6ef66368eda57be826c85ca9bad71e3a7bf1f6531"
+    },
+    {
+      "name": "typical_32hex_nonce",
+      "input": {
+        "api_key": "jdb_ak_supersecret_canonical_test_value",
+        "agent_id": "jdb_ag_canonical_002",
+        "timestamp": 1900000000,
+        "nonce": "deadbeef0123456789abcdef01234567"
+      },
+      "expected_wire": "v2:1900000000:deadbeef0123456789abcdef01234567:4c1c2037f5625eeabe877e596985d6efa9c035d25f0f808e2c749eb7ba9831f0"
+    },
+    {
+      "name": "long_64hex_nonce",
+      "input": {
+        "api_key": "jdb_ak_long_nonce_case_xyz",
+        "agent_id": "jdb_ag_canonical_003",
+        "timestamp": 1800000000,
+        "nonce": "a1b2c3d4e5f6789001112233445566778899aabbccddeeff0011223344556677"
+      },
+      "expected_wire": "v2:1800000000:a1b2c3d4e5f6789001112233445566778899aabbccddeeff0011223344556677:d3bca512bc4732b89ff57bd30841741288a63344eacdec38a855fe1256caa1b3"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "wire_no_v2_prefix",
+      "wire": "not-v2-format",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "wire_only_three_parts",
+      "wire": "v2:1762689600:abcdef",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "timestamp_not_integer",
+      "wire": "v2:not-a-number:0123456789abcdef:0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "nonce_too_short",
+      "wire": "v2:1762689600:abc:0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "nonce_non_hex",
+      "wire": "v2:1762689600:zzzzzzzzzzzzzzzzzzzz:0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "hmac_tag_wrong_length",
+      "wire": "v2:1762689600:0123456789abcdef:tooshort",
+      "expected_subcause": "wire_malformed",
+      "input": {
+        "api_key": "jdb_ak_test_neutral",
+        "agent_id": "jdb_ag_test_neutral",
+        "now": 1762689600
+      }
+    },
+    {
+      "name": "hmac_tag_mismatch",
+      "wire": "v2:1900000000:deadbeef0123456789abcdef01234567:09bbb03626251362cc67da39acbb1615be0ec39c7a45998c56ab5fb385484450",
+      "input": {
+        "api_key": "jdb_ak_secret",
+        "agent_id": "jdb_ag_test",
+        "now": 1900000000
+      },
+      "expected_subcause": "hmac_mismatch"
+    }
+  ],
+  "clock_skew": [
+    {
+      "name": "clock_skew_minus_3600s",
+      "skew_offset_sec": -3600,
+      "expected_subcause": "clock_skew"
+    },
+    {
+      "name": "clock_skew_plus_400s",
+      "skew_offset_sec": 400,
+      "expected_subcause": "clock_skew"
+    },
+    {
+      "name": "boundary_inclusive_300s",
+      "skew_offset_sec": 300,
+      "expected_subcause": null
+    }
+  ]
+}
