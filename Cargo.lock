@@ -2994,7 +2994,7 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jecp"
-version = "0.1.0"
+version = "1.1.1"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3048,7 +3048,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "webpki-roots 0.26.11",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -4619,9 +4619,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.36"
+version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c665f33d38cea657d9614f766881e4d510e0eda4239891eea56b4cadcf01801b"
+checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
  "aws-lc-rs",
  "log",
