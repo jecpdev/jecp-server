@@ -41,7 +41,7 @@ reqwest-eventsource = "0.6"
 # rustls dangerous_configuration: required to install a custom verifier on
 # top of WebPkiServerVerifier (chain validation) + SPKI pin check.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 # subtle: constant-time SPKI pin compare. Already in dep tree via bcrypt /
 # ed25519-dalek / curve25519-dalek — zero new transitives.
 subtle = "2"
