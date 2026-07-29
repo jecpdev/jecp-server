@@ -68,7 +68,7 @@ http-body-util = "0.1"
 parking_lot = "0.12"
 # v1.0.1: replay cache (Provenance v2 nonce LRU per spec §5.2 step 5).
 # 0.16+: GHSA-rhfx-m35p-ff5j (IterMut Stacked Borrows soundness fix).
-lru = "0.16"
+lru = "0.18"
 # v1.0.2 K2.5: action input_schema validation against published manifest.
 # default-features = false drops the optional reqwest dep (we only validate
 # against in-memory schemas — never fetch remote $refs over HTTP).
